@@ -29,7 +29,7 @@ typedef void (*wifi_connected_event_callback_t)(void);
 #define WIFI_STA_POWER_SAVE			WIFI_PS_NONE		// Power save not used
 #define MAX_SSID_LENGTH				32					// IEEE standard maximum
 #define MAX_PASSWORD_LENGTH			64					// IEEE standard maximum
-#define MAX_CONNECTION_RETRIES		5					// Retry number on disconnect
+// #define MAX_CONNECTION_RETRIES		5					// Retry number on disconnect
 
 // netif object for the Station and Access Point
 extern esp_netif_t* esp_netif_sta;

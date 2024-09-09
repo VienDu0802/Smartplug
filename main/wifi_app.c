@@ -88,15 +88,16 @@ static void wifi_app_event_handler(void *arg, esp_event_base_t event_base, int32
 				*wifi_event_sta_disconnected = *((wifi_event_sta_disconnected_t*)event_data);
 				printf("WIFI_EVENT_STA_DISCONNECTED, reason code %d\n", wifi_event_sta_disconnected->reason);
 
-				if (g_retry_number < MAX_CONNECTION_RETRIES)
-				{
-					esp_wifi_connect();
-					g_retry_number ++;
-				}
-				else
-				{
-					wifi_app_send_message(WIFI_APP_MSG_STA_DISCONNECTED);
-				}
+				esp_wifi_connect();
+				// if (g_retry_number < MAX_CONNECTION_RETRIES)
+				// {
+				// 	esp_wifi_connect();
+				// 	g_retry_number ++;
+				// }
+				// else
+				// {
+				// 	wifi_app_send_message(WIFI_APP_MSG_STA_DISCONNECTED);
+				// }
 
 				break;
 		}
@@ -298,7 +299,7 @@ static void wifi_app_task(void *pvParameters)
 					{
 						xEventGroupSetBits(wifi_app_event_group, WIFI_APP_USER_REQUESTED_STA_DISCONNECT_BIT);
 
-						g_retry_number = MAX_CONNECTION_RETRIES;
+						// g_retry_number = MAX_CONNECTION_RETRIES;
 						ESP_ERROR_CHECK(esp_wifi_disconnect());
 						app_nvs_clear_sta_creds();
 					}
@@ -321,16 +322,16 @@ static void wifi_app_task(void *pvParameters)
 						xEventGroupClearBits(wifi_app_event_group, WIFI_APP_CONNECTING_FROM_HTTP_SERVER_BIT);
 						http_server_monitor_send_message(HTTP_MSG_WIFI_CONNECT_FAIL);
 					}
-					else if (eventBits & WIFI_APP_USER_REQUESTED_STA_DISCONNECT_BIT)
+					else if(eventBits & WIFI_APP_USER_REQUESTED_STA_DISCONNECT_BIT)
 					{
 						ESP_LOGI(TAG, "WIFI_APP_MSG_STA_DISCONNECTED: USER REQUESTED DISCONNECTION");
 						xEventGroupClearBits(wifi_app_event_group, WIFI_APP_USER_REQUESTED_STA_DISCONNECT_BIT);
 						http_server_monitor_send_message(HTTP_MSG_WIFI_USER_DISCONNECT);
 					}
-					else
-					{
-						ESP_LOGI(TAG, "WIFI_APP_MSG_STA_DISCONNECTED: ATTEMPT FAILED, CHECK WIFI ACCESS POINT AVAILABILITY");
-					}
+					// else
+					// {
+					// 	ESP_LOGI(TAG, "WIFI_APP_MSG_STA_DISCONNECTED: ATTEMPT FAILED, CHECK WIFI ACCESS POINT AVAILABILITY");
+					// }
 					if (eventBits & WIFI_APP_STA_CONNECTED_GOT_IP_BIT)
 					{
 						xEventGroupClearBits(wifi_app_event_group, WIFI_APP_STA_CONNECTED_GOT_IP_BIT);
