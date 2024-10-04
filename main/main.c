@@ -8,6 +8,9 @@
 #include "nvs_flash.h"
 #include "wifi_reset_button.h"
 #include "wifi_app.h"
+#include "mqtt.h"
+#include "firebase.h"
+#include "freertos/task.h"
 
 void app_main(void)
 {
@@ -23,6 +26,7 @@ void app_main(void)
 	// Start Wifi
 	wifi_app_start();
 
-	// Configure wifi reset button
-	wifi_reset_button_config();
+	MQTT_task_start();
+
+	get_schedule_from_firebase();
 }
