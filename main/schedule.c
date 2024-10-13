@@ -1,4 +1,4 @@
-#include "firebase.h"
+#include "schedule.h"
 #include "esp_http_client.h"
 #include "cJSON.h"
 #include "time_sync.h"
@@ -60,12 +60,18 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
                 char current_time[64];
                 char current_day[16];
                 get_current_time(current_time, current_day);  
+                int current_seconds = atoi(&current_time[6]); 
+
+                char current_time_no_seconds[6];
+                strncpy(current_time_no_seconds, current_time, 5);
+                current_time_no_seconds[5] = '\0';
                 
                 for (int i = 0; current_day[i]; i++) {
                     current_day[i] = toupper(current_day[i]);
                 }
                 ESP_LOGI(TAG, "Current time: %s", current_time);
                 ESP_LOGI(TAG, "Current day: %s", current_day);
+
                 cJSON *schedule;
                 cJSON_ArrayForEach(schedule, json) {
                     cJSON *name = cJSON_GetObjectItem(schedule, "name");
@@ -77,8 +83,9 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
                         ESP_LOGI(TAG, "Tên lịch: %s, Thời gian: %s, Lặp lại: %s, Hành động: %s",
                                 name->valuestring, time->valuestring, repeat->valuestring, action->valuestring);
 
-                        if (strcmp(time->valuestring, current_time) == 0 && 
-                            is_day_in_repeat(repeat->valuestring, current_day)) {
+                        if (strcmp(time->valuestring, current_time_no_seconds) == 0 && 
+                            is_day_in_repeat(repeat->valuestring, current_day) &&
+                            current_seconds >= 0 && current_seconds <= 9) {
                             if (strcmp(action->valuestring, "ON") == 0) {
                                 gpio_set_level(RELAY_GPIO_PIN, 1);  
                                 ESP_LOGI(TAG, "Bật thiết bị theo lịch: %s", name->valuestring);

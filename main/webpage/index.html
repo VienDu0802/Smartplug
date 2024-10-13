@@ -25,17 +25,44 @@
     <div class="section-box" id="OTA">
         <h2 class="section-title">Smartplug Firmware Update</h2>
         <br>
-        <label id="latest_firmware_label">Latest Firmware: <div id="latest_firmware" style="display: inline-block"></div></label>
-        <input type="file" id="selected_file" accept=".bin" style="display: none;" onchange="getFileInfo()" />
-        <div class="buttons">
-            <input type="button" value="Select File" onclick="document.getElementById('selected_file').click();" />
+    
+        <!-- Navigation bar with two buttons -->
+        <div class="nav-bar">
+            <button id="manual_nav" class="nav-button active" onclick="showManualUpdate()">Manually</button>
+            <button id="auto_nav" class="nav-button" onclick="showAutoUpdate()">Automatically</button>
         </div>
-        <h4 id="file_info"></h4>
-        <div class="buttons">
-            <input type="button" id="update_button" value="Update Firmware" onclick="updateFirmware()" style="display: none;" />
+    
+        <!-- Manual Update Section -->
+        <div id="manual_update_section" style="display: block;">
+            <h3>Manual Update</h3>
+            <label>Current Firmware Version: <div id="current_version_manual" style="display: inline-block; color: #0288d1;"></div></label>
+            
+            <input type="file" id="selected_file" accept=".bin" style="display: none;" onchange="getFileInfo()" />
+            <div class="buttons">
+                <input type="button" value="Select File" onclick="document.getElementById('selected_file').click();" />
+            </div>
+            <h4 id="file_info"></h4>
+            <div class="buttons">
+                <input type="button" id="update_button" value="Update Firmware" onclick="updateFirmware()" style="display: none;" />
+            </div>
+            <h4 id="ota_update_status"></h4>
         </div>
-        <h4 id="ota_update_status"></h4>
+    
+        <!-- Automatic Update Section -->
+        <div id="auto_update_section" style="display: none;">
+            <h3>Automatic Update</h3>
+            <label>Current Firmware Version: <div id="current_version_auto" style="display: inline-block; color: #0288d1;"></div></label>
+            
+            <div id="update_notification" style="display: none;">
+                <h4 style="color: #333;"><strong>Found new version: <span id="latest_firmware"></span></strong></h4>
+                <input type="button" id="update_button_auto" value="Update Firmware" onclick="updateFirmwareAuto()" style="display: none;" />
+            </div>
+            <h4 id="ota_update_status2"></h4>
+        </div>
+
     </div>
+    
+    
     <hr>
 
     <div class="section-box" id="WifiConnect">

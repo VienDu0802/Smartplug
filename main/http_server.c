@@ -12,10 +12,15 @@
 #include "lwip/ip4_addr.h"
 #include "esp_timer.h"
 #include "sys/param.h"
+#include "esp_http_client.h"
+#include "cJSON.h"
 
 #include "http_server.h"
 #include "tasks_common.h"
 #include "wifi_app.h"
+#include "nvs_flash.h"
+#include "schedule.h"
+#include "mqtt.h"
 
 // Tag used for ESP serial console messages
 static const char TAG[] = "http_server";
@@ -34,6 +39,9 @@ static TaskHandle_t task_http_server_monitor = NULL;
 
 // Queue handle used to manipulate the main queue of events
 static QueueHandle_t http_server_monitor_queue_handle;
+
+static char latest_firmware_version[64];
+static char firmware_update_url[256];
 
 /**
  * ESP32 timer configuration passed to esp_timer_create.
@@ -231,6 +239,353 @@ static esp_err_t http_server_sp_icon_handler(httpd_req_t *req)
 	return ESP_OK;
 }
 
+esp_err_t write_firmware_version_to_nvs(const char *version) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) return err;
+
+    err = nvs_set_str(nvs_handle, "fw_ver", version);
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs_handle);
+    }
+	else {
+		printf("Error writing firmware version to NVS: %s\n", esp_err_to_name(err));
+	}
+    nvs_close(nvs_handle);
+    
+    return err;
+}
+
+esp_err_t get_firmware_version_from_nvs(char *version, size_t len)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("storage", NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) return err;
+
+    err = nvs_get_str(nvs_handle, "fw_ver", version, &len);
+    nvs_close(nvs_handle);
+    
+    return err;
+}
+
+esp_err_t erase_firmware_version_from_nvs() {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        printf("Error opening NVS: %s\n", esp_err_to_name(err));
+        return err;
+    }
+
+    err = nvs_erase_key(nvs_handle, "fw_ver");
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs_handle);
+        if (err != ESP_OK) {
+            printf("Error committing NVS: %s\n", esp_err_to_name(err));
+        } else {
+            printf("Firmware version erased from NVS successfully.\n");
+        }
+    } else {
+        printf("Error erasing firmware version from NVS: %s\n", esp_err_to_name(err));
+    }
+
+    nvs_close(nvs_handle);
+
+    return err;
+}
+
+esp_err_t firmware_version_get_handler(httpd_req_t *req)
+{
+	ESP_LOGI(TAG, "/firmware_version_uri requested");
+    char version[64];
+    esp_err_t err = get_firmware_version_from_nvs(version, sizeof(version));
+
+    if (err != ESP_OK)
+    {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    char response[100];
+    snprintf(response, sizeof(response), "{\"firmware_version\": \"%s\"}", version);
+    
+    httpd_resp_set_type(req, "application/json");
+    
+    httpd_resp_send(req, response, strlen(response));
+
+    return ESP_OK;
+}
+
+esp_err_t _http_event_handler_firmware(esp_http_client_event_t *evt)
+{
+    static char *output_buffer;
+    static int output_len;
+
+    if (evt->event_id == HTTP_EVENT_ERROR) {
+        ESP_LOGD(TAG, "HTTP_EVENT_ERROR");
+    } else if (evt->event_id == HTTP_EVENT_ON_CONNECTED) {
+        ESP_LOGD(TAG, "HTTP_EVENT_ON_CONNECTED");
+    } else if (evt->event_id == HTTP_EVENT_HEADER_SENT) {
+        ESP_LOGD(TAG, "HTTP_EVENT_HEADER_SENT");
+    } else if (evt->event_id == HTTP_EVENT_ON_HEADER) {
+        ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
+    } else if (evt->event_id == HTTP_EVENT_ON_DATA) {
+        ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d", evt->data_len);
+        if (!esp_http_client_is_chunked_response(evt->client)) {
+            if (output_buffer == NULL) {
+                output_buffer = (char *) malloc(esp_http_client_get_content_length(evt->client));
+                output_len = 0;
+                if (output_buffer == NULL) {
+                    ESP_LOGE(TAG, "Không thể cấp phát bộ nhớ cho output buffer");
+                    return ESP_FAIL;
+                }
+            }
+            memcpy(output_buffer + output_len, evt->data, evt->data_len);
+            output_len += evt->data_len;
+        }
+    } else if (evt->event_id == HTTP_EVENT_ON_FINISH) {
+        ESP_LOGD(TAG, "HTTP_EVENT_ON_FINISH");
+        if (output_buffer != NULL) {
+            ESP_LOGI(TAG, "HTTP Response: %s", output_buffer);
+
+            cJSON *json = cJSON_Parse(output_buffer);
+            if (json != NULL) {
+                cJSON *version = cJSON_GetObjectItem(json, "version");
+                cJSON *firmware_url = cJSON_GetObjectItem(json, "firmware_url");
+                if (version && firmware_url) {
+                    ESP_LOGI(TAG, "Firmware version: %s, URL: %s", version->valuestring, firmware_url->valuestring);
+					strncpy(latest_firmware_version, version->valuestring, sizeof(latest_firmware_version) - 1);
+                    strncpy(firmware_update_url, firmware_url->valuestring, sizeof(firmware_update_url) - 1);
+                } else {
+                    ESP_LOGE(TAG, "Thông tin firmware không đầy đủ");
+                }
+                cJSON_Delete(json);
+            } else {
+                ESP_LOGE(TAG, "Phân tích JSON thất bại");
+            }
+
+            free(output_buffer);
+            output_buffer = NULL;
+        }
+    } else if (evt->event_id == HTTP_EVENT_DISCONNECTED) {
+        ESP_LOGI(TAG, "HTTP_EVENT_DISCONNECTED");
+        if (output_buffer != NULL) {
+            free(output_buffer);
+            output_buffer = NULL;
+        }
+        output_len = 0;
+    }
+    return ESP_OK;
+}
+
+void get_latest_firmware_from_firebase()
+{
+    const char *firebase_url = "https://smartplug-b7468-default-rtdb.firebaseio.com/firmware_info.json";
+
+    esp_http_client_config_t config = {
+        .url = firebase_url,
+		.buffer_size = 2048,
+		.method = HTTP_METHOD_GET,
+        .timeout_ms = 5000,
+		.event_handler = _http_event_handler_firmware,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+
+    esp_err_t err = esp_http_client_perform(client);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Yêu cầu HTTP thất bại với lỗi: %s", esp_err_to_name(err));
+    }
+
+    esp_http_client_cleanup(client);
+}
+
+esp_err_t check_firmware_update(httpd_req_t *req)
+{
+    char current_version[64];
+
+    esp_err_t err = get_firmware_version_from_nvs(current_version, sizeof(current_version));
+    if (err != ESP_OK)
+    {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+	get_latest_firmware_from_firebase();
+
+    if (strcmp(current_version, latest_firmware_version) != 0)
+    {
+        char response[512];
+        snprintf(response, sizeof(response), "{\"found_new_version\": true, \"latest_version\": \"%s\", \"firmware_url\": \"%s\"}", latest_firmware_version, firmware_update_url);
+
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, response, strlen(response));
+    }
+    else
+    {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"found_new_version\": false}", strlen("{\"found_new_version\": false}"));
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t download_and_perform_OTA_from_url(const char *url)
+{
+    esp_ota_handle_t ota_handle;
+    char ota_buff[1024];
+    int recv_len;
+    int content_received = 0;
+    bool flash_successful = false;
+    bool is_ota_started = false;
+
+    const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
+	
+    esp_http_client_config_t config = {
+        .url = url,
+        .timeout_ms = 5000,
+        .buffer_size = 1024,
+        .buffer_size_tx = 1024,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to initialize HTTP connection");
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = esp_http_client_open(client, 0);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return ESP_FAIL;
+    }
+
+    int content_length = esp_http_client_fetch_headers(client);
+    if (content_length <= 0)
+    {
+        ESP_LOGE(TAG, "Content length error: %d", content_length);
+        esp_http_client_cleanup(client);
+        return ESP_FAIL;
+    }
+
+    printf("Starting OTA from URL, file size: %d bytes\n", content_length);
+
+    do
+    {
+        recv_len = esp_http_client_read(client, ota_buff, sizeof(ota_buff));  // Đọc dữ liệu từ HTTP
+        if (recv_len < 0)
+        {
+            ESP_LOGE(TAG, "Error during OTA data reception: %d", recv_len);
+            esp_http_client_cleanup(client);
+            return ESP_FAIL;
+        }
+
+        if (!is_ota_started)
+        {
+            is_ota_started = true;
+
+            err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &ota_handle);
+            if (err != ESP_OK)
+            {
+                ESP_LOGE(TAG, "Error with OTA begin: %s", esp_err_to_name(err));
+                esp_http_client_cleanup(client);
+                return ESP_FAIL;
+            }
+
+            ESP_LOGI(TAG, "Writing to partition subtype %d at offset 0x%lx", update_partition->subtype, update_partition->address);
+        }
+
+        err = esp_ota_write(ota_handle, ota_buff, recv_len);
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "OTA write failed: %s", esp_err_to_name(err));
+            esp_ota_end(ota_handle);
+            esp_http_client_cleanup(client);
+            return ESP_FAIL;
+        }
+
+        content_received += recv_len;
+        printf("Received %d/%d bytes\n", content_received, content_length);
+
+    } while (recv_len > 0 && content_received < content_length);
+
+    if (esp_ota_end(ota_handle) == ESP_OK)
+    {
+        if (esp_ota_set_boot_partition(update_partition) == ESP_OK)
+        {
+            const esp_partition_t *boot_partition = esp_ota_get_boot_partition();
+            ESP_LOGI(TAG, "OTA update successful! Next boot partition subtype %d at offset 0x%lx", boot_partition->subtype, boot_partition->address);
+            flash_successful = true;
+        }
+        else
+        {
+            ESP_LOGE(TAG, "Failed to set boot partition!");
+        }
+    }
+    else
+    {
+        ESP_LOGE(TAG, "OTA end failed!");
+    }
+	
+	if (flash_successful) { http_server_monitor_send_message(HTTP_MSG_OTA_UPDATE_SUCCESSFUL); } else { http_server_monitor_send_message(HTTP_MSG_OTA_UPDATE_FAILED); }
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+    if (flash_successful)
+    {
+		erase_firmware_version_from_nvs();
+		write_firmware_version_to_nvs(latest_firmware_version);
+        return ESP_OK;
+    }
+    else
+    {
+        return ESP_FAIL;
+    }
+}
+
+
+esp_err_t download_and_perform_OTA_from_json(const char *json_data)
+{
+    cJSON *json = cJSON_Parse(json_data);
+    if (json == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to parse JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *url_item = cJSON_GetObjectItem(json, "url");
+    if (!cJSON_IsString(url_item) || (url_item->valuestring == NULL))
+    {
+        ESP_LOGE(TAG, "Failed to get URL from JSON");
+        cJSON_Delete(json);
+        return ESP_FAIL;
+    }
+
+    const char *url = url_item->valuestring;
+    ESP_LOGI(TAG, "Parsed OTA URL: %s", url);
+
+    esp_err_t result = download_and_perform_OTA_from_url(url);
+
+    cJSON_Delete(json);
+
+    return result;
+}
+
+esp_err_t http_server_OTA_from_url_handler(httpd_req_t *req)
+{
+    char json_data[256];
+    int recv_len = httpd_req_recv(req, json_data, sizeof(json_data) - 1);
+    if (recv_len <= 0) {
+        ESP_LOGE(TAG, "Failed to receive JSON data");
+        return ESP_FAIL;
+    }
+    json_data[recv_len] = '\0';
+
+    return download_and_perform_OTA_from_json(json_data);
+}
+
 /**
  * Receives the .bin file fia the web page and handles the firmware update
  * @param req HTTP request for which the uri needs to be handled.
@@ -332,13 +687,27 @@ esp_err_t http_server_OTA_update_handler(httpd_req_t *req)
  * @param req HTTP request for which the uri needs to be handled
  * @return ESP_OK
  */
-esp_err_t http_server_OTA_status_handler(httpd_req_t *req)
+esp_err_t http_server_OTA_status_manual_update_handler(httpd_req_t *req)
 {
 	char otaJSON[100];
 
 	ESP_LOGI(TAG, "OTAstatus requested");
 
-	sprintf(otaJSON, "{\"ota_update_status\":%d,\"compile_time\":\"%s\",\"compile_date\":\"%s\"}", g_fw_update_status, __TIME__, __DATE__);
+	sprintf(otaJSON, "{\"ota_manual_update_status\":%d}", g_fw_update_status);
+
+	httpd_resp_set_type(req, "application/json");
+	httpd_resp_send(req, otaJSON, strlen(otaJSON));
+
+	return ESP_OK;
+}
+
+esp_err_t http_server_OTA_status_auto_update_handler(httpd_req_t *req)
+{
+	char otaJSON[100];
+
+	ESP_LOGI(TAG, "OTAstatus requested");
+
+	sprintf(otaJSON, "{\"ota_auto_update_status\":%d}", g_fw_update_status);
 
 	httpd_resp_set_type(req, "application/json");
 	httpd_resp_send(req, otaJSON, strlen(otaJSON));
@@ -567,14 +936,48 @@ static httpd_handle_t http_server_configure(void)
 		};
 		httpd_register_uri_handler(http_server_handle, &OTA_update);
 
+		// register OTAupdate URL handler
+		httpd_uri_t OTA_update_url = {
+				.uri = "/OTAupdateURL",
+				.method = HTTP_POST,
+				.handler = http_server_OTA_from_url_handler,
+				.user_ctx = NULL
+		};
+		httpd_register_uri_handler(http_server_handle, &OTA_update_url);
+
 		// register OTAstatus handler
 		httpd_uri_t OTA_status = {
-				.uri = "/OTAstatus",
+				.uri = "/OTAmanualStatus",
 				.method = HTTP_GET,
-				.handler = http_server_OTA_status_handler,
+				.handler = http_server_OTA_status_manual_update_handler,
 				.user_ctx = NULL
 		};
 		httpd_register_uri_handler(http_server_handle, &OTA_status);
+
+		httpd_uri_t OTA_status2 = {
+				.uri = "/OTAautoStatus",
+				.method = HTTP_GET,
+				.handler = http_server_OTA_status_auto_update_handler,
+				.user_ctx = NULL
+		};
+		httpd_register_uri_handler(http_server_handle, &OTA_status2);
+
+		// Định nghĩa URI handler
+		httpd_uri_t firmware_version_uri = {
+			.uri = "/version",
+			.method = HTTP_GET,
+			.handler = firmware_version_get_handler,
+			.user_ctx = NULL
+		};
+		httpd_register_uri_handler(http_server_handle, &firmware_version_uri);
+
+		httpd_uri_t firmware_check_update_uri = {
+			.uri = "/check_firmware_update",
+			.method = HTTP_GET,
+			.handler = check_firmware_update,
+			.user_ctx = NULL
+		};
+		httpd_register_uri_handler(http_server_handle, &firmware_check_update_uri);
 
 		// register wifiConnect.json handler
 		httpd_uri_t wifi_connect_json = {

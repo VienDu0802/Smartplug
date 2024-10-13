@@ -2,7 +2,7 @@
 # for more information about component CMakeLists.txt files.
 
 idf_component_register(
-    SRCS main.c wifi_app.c http_server.c app_nvs.c wifi_reset_button.c hlw8032.c mqtt.c firebase.c time_sync.c  # list the source files of this component
+    SRCS main.c wifi_app.c http_server.c app_nvs.c wifi_reset_button.c hlw8032.c mqtt.c schedule.c time_sync.c  # list the source files of this component
     INCLUDE_DIRS "."       # optional, add here public include directories
     EMBED_FILES webpage/app.css webpage/app.js webpage/index.html webpage/favicon.ico webpage/jquery-3.3.1.min.js webpage/sp_icon.png
     EMBED_TXTFILES certificate.pem

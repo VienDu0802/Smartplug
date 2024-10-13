@@ -22,7 +22,7 @@
 // #include "wifi_app.h"
 // #include "http_server.h"
 #include "mqtt.h"
-#include "firebase.h"
+#include "schedule.h"
 
 // CONNECT TO MQTT
 static const char *TAG = "MQTT";

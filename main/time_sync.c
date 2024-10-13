@@ -34,7 +34,7 @@ void get_current_time(char *time_buffer, char *day_buffer)
     time(&now);
     localtime_r(&now, &timeinfo);
     
-    strftime(time_buffer, 64, "%H:%M", &timeinfo);
+    strftime(time_buffer, 64, "%H:%M:%S", &timeinfo);
     
     strftime(day_buffer, 16, "%a", &timeinfo);
 }

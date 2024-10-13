@@ -7,7 +7,7 @@
 
 // Adafruit IO credentials
 #define AIO_USERNAME "An3003"
-#define AIO_KEY "aio_OkZN03YKgJl9H3bRCMPiZD0vLYI1"
+#define AIO_KEY "aio_Lkvn76hhmzFfLY056UenudISdQEw"
 
 void mqtt_publish_data(const char *topic, const char *data);
 /**

@@ -67,5 +67,7 @@ void http_server_stop(void);
  * Timer callback function which calls esp_restart upon successful firmware update.
  */
 void http_server_fw_update_reset_callback(void *arg);
-
+esp_err_t get_firmware_version_from_nvs(char *version, size_t len);
+esp_err_t write_firmware_version_to_nvs(const char *version);
+esp_err_t erase_firmware_version_from_nvs();
 #endif /* MAIN_HTTP_SERVER_H_ */

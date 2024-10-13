@@ -16,8 +16,135 @@ $(document).ready(function(){
     });
 	$("#disconnect_wifi").on("click", function(){
 		disconnectWifi();
-	}); 
-});   
+	});
+    showManualUpdate()
+});
+
+document.addEventListener("DOMContentLoaded", function() {
+    showManualUpdate();
+    getFirmwareVersion();
+});
+
+function showManualUpdate() {
+    document.getElementById("manual_update_section").style.display = "block";
+    document.getElementById("auto_update_section").style.display = "none";
+    setActiveNavButton('manual_nav');
+    getFirmwareVersion().then(version => {
+        document.getElementById("current_version_manual").innerText = version;
+    });
+	document.getElementById("update_button").style.display = "none";
+}
+
+function showAutoUpdate() {
+    document.getElementById("manual_update_section").style.display = "none";
+    document.getElementById("auto_update_section").style.display = "block";
+    setActiveNavButton('auto_nav');
+    getFirmwareVersion().then(version => {
+        document.getElementById("current_version_auto").innerText = version;
+        checkLatestFirmware(version);
+    });
+	document.getElementById("update_notification").style.display = "none";
+	
+}
+
+function setActiveNavButton(buttonId) {
+    document.getElementById("manual_nav").classList.remove("active");
+    document.getElementById("auto_nav").classList.remove("active");
+    document.getElementById(buttonId).classList.add("active");
+}
+
+async function getFirmwareVersion() {
+    try {
+        const response = await fetch('/version');
+        if (!response.ok) {
+            throw new Error('Failed to fetch firmware version');
+        }
+        const data = await response.json();
+        return data.firmware_version;
+    } catch (error) {
+        console.error("Error in getFirmwareVersion: ", error);
+        return null;
+    }
+}
+
+async function checkLatestFirmware(currentVersion) {
+    try {
+        const response = await fetch('/check_firmware_update');
+        if (!response.ok) {
+            throw new Error('Failed to fetch firmware info from ESP32');
+        }
+
+        const data = await response.json();
+        const foundNewVersion = data.found_new_version;
+        const latestVersion = data.latest_version;
+        const firmwareUrl = data.firmware_url;
+
+        document.getElementById("latest_firmware").innerHTML = latestVersion;
+
+        if (foundNewVersion) {
+            document.getElementById("update_notification").style.display = "block";
+            document.getElementById("update_button_auto").style.display = "inline";
+
+            document.getElementById("update_button_auto").setAttribute("data-firmware-url", firmwareUrl);
+        }
+    } catch (error) {
+        console.error("Error in checkLatestFirmware: ", error);
+    }
+}
+
+function updateFirmwareAuto() {
+    var firmwareUrl = document.getElementById("update_button_auto").getAttribute("data-firmware-url");
+
+    if (firmwareUrl) {
+        document.getElementById("ota_update_status2").innerHTML = '<h4 style="color: #333;">Automatic Firmware Update in Progress...<div class="spinner"></div></h4>';
+
+        setTimeout(function() {
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/OTAupdateURL');
+            xhr.setRequestHeader('Content-Type', 'application/json');
+
+            var otaPayload = {
+                url: firmwareUrl
+            };
+
+            xhr.send(JSON.stringify(otaPayload));
+
+            checkAutoUpdateStatus();
+        }, 100);
+    } else {
+        document.getElementById("ota_update_status2").innerHTML = '<h4 style="color: #ff0000;">No firmware URL found.</h4>';
+    }
+}
+
+function checkAutoUpdateStatus() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/OTAautoStatus', false);
+    xhr.send('ota_auto_update_status');
+
+    if (xhr.readyState == 4 && xhr.status == 200) {
+        var response = JSON.parse(xhr.responseText);
+
+        if (response.ota_auto_update_status == 1) {
+            seconds = 10;
+            document.getElementById("ota_update_status2").innerHTML = "<h4 class='gr'>Firmware Update Complete. Rebooting in: " + seconds + "</h4>";
+            otaRebootTimerAuto();
+        } else if (response.ota_auto_update_status == -1) {
+            document.getElementById("ota_update_status2").innerHTML = "<h4 class='rd'>!!! Upload Error !!!</h4>";
+        } else {
+            setTimeout(checkAutoUpdateStatus, 1000);
+        }
+    }
+}
+
+function otaRebootTimerAuto() {
+    if (--seconds == 0) {
+        clearTimeout(otaTimerVar);
+        window.location.reload();
+    } else {
+        document.getElementById("ota_update_status2").innerHTML = "<h4 class='gr'>Firmware Update Complete. Rebooting in: " + seconds + "</h4>";
+        otaTimerVar = setTimeout(otaRebootTimerAuto, 1000);
+    }
+}
 
 /**
  * Gets file name and size for display on the web page.
@@ -27,13 +154,10 @@ function getFileInfo()
     var x = document.getElementById("selected_file");
     var file = x.files[0];
 
-    document.getElementById("file_info").innerHTML = "<h4>File: " + file.name + "<br>" + "Size: " + file.size + " bytes</h4>";
+    document.getElementById("file_info").innerHTML = '<h4 style="color: #333;">File: ' + file.name + "<br>" + "Size: " + file.size + " bytes</h4>";
 	document.getElementById('update_button').style.display = 'inline'; // Show the Update button
 }
 
-/**
- * Handles the firmware update.
- */
 function updateFirmware() 
 {
     // Form Data
@@ -44,7 +168,7 @@ function updateFirmware()
 	{
         var file = fileSelect.files[0];
         formData.set("file", file, file.name);
-        document.getElementById("ota_update_status").innerHTML = "Uploading " + file.name + ', Firmware Update in Progress... <div class="spinner"></div>';
+        document.getElementById("ota_update_status").innerHTML = '<h4 style="color: green;">Uploading ' + file.name + ', Firmware Update in Progress... <div class="spinner"></div></h4>';
 
         // Http Request
         var request = new XMLHttpRequest();
@@ -81,15 +205,13 @@ function updateProgress(oEvent)
 function getUpdateStatus() 
 {
     var xhr = new XMLHttpRequest();
-    var requestURL = "/OTAstatus";
+    var requestURL = "/OTAmanualStatus";
     xhr.open('GET', requestURL, false);
     xhr.send('ota_update_status');
 
     if (xhr.readyState == 4 && xhr.status == 200) 
 	{		
         var response = JSON.parse(xhr.responseText);
-						
-	 	document.getElementById("latest_firmware").innerHTML = response.compile_date + " - " + response.compile_time
 
 		// If flashing was complete it will return a 1, else -1
 		// A return of 0 is just for information on the Latest Firmware request
